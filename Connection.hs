@@ -1,9 +1,10 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE OverloadedStrings  #-}
+{-# LANGUAGE RankNTypes         #-}
 module Connection where
 
 import           Control.Applicative        ((<$>), (<*>))
-import           Control.Exception          (Exception, throw, throwIO)
+import           Control.Exception          (Exception, onException, throw, throwIO)
 import           Control.Monad.Error
 import           Control.Monad.State.Strict
 import qualified Crypto.Hash.SHA1           as SHA1
@@ -44,29 +45,38 @@ data StreamTextResponse = SRes     StreamResultSetPackets
                         | SResOK  (Packed OK)
 
 defaultConnectInfo :: ConnectInfo
-defaultConnectInfo = ConnectInfo "localhost" "3306" "" "root" "" 1024 1
+defaultConnectInfo = ConnectInfo "localhost" "3306" "" "root" "" 4096 1
 
 type BytesProducer = Producer ByteString IO ()
 
 data ConnFaliure = AuthFaliure ERR deriving (Typeable, Show)
 instance Exception ConnFaliure
 
-data Connection = Connection { cs :: Socket, cp :: BytesProducer, connGreet :: Greeting}
+data Connection = Connection
+    { cs        :: Socket
+    , cp        :: BytesProducer
+    , connGreet :: Greeting}
+
 --TODO close socket if we encounter exception
 connectDB :: ConnectInfo -> IO Connection
 connectDB (ConnectInfo host service db user pass bs nd) = do
     sock <- connSock
-    (res, prod) <- parseGreeting sock bs
-    case res of
-        Right g ->
-            sendAuth sock g (pack user) (pack pass) (pack db)
-            >> parseAuthAck prod
-            >>= \(x, p') ->
-                let buildConn packet
-                        | isOKP packet = Connection sock p' g
-                        | otherwise = throw (AuthFaliure $ runGet (getERR (pLen packet)) (pBody packet) )
-                in return $ either throw buildConn x
-        Left e -> throwIO e
+    onException (do
+        (res, prod) <- parseGreeting sock bs
+        case res of
+            Right g ->
+                sendAuth sock g (pack user) (pack pass) (pack db)
+                >> parseAuthAck prod
+                >>= \(x, p') ->
+                    let buildConn packet
+                            | isOKP packet = Connection sock p' g
+                            | otherwise =
+                                throw (AuthFaliure $
+                                        runGet (getERR (pLen packet))
+                                            (pBody packet))
+                    in return $ either throw buildConn x
+            Left e -> throwIO e)
+        $ sClose sock
     where
     connSock = do
             addrs <- getAddrInfo Nothing (Just host) (Just service)
@@ -91,36 +101,35 @@ run (Connection s p _) qry io = do
 withRows :: RowStream -> (RowData -> IO ()) -> IO ()
 withRows rows io = runEffect $ for rows $ lift . io . payload
 
-{--\x -> lift $ do
-                                                r <- x
-                                                io $ payload r
-                                                --}
-
 probResp :: Get (Maybe StreamTextResponse)
 probResp = do
     pkt <- lookAhead getPacket
     build pkt
     where build p
-            | isErrP  p  = Just <$> (SResErr <$> (Packed <$> getPacketHeader <*> (getERR $ pLen p)))
+            | isErrP  p  = Just <$> (SResErr
+                                    <$> (Packed
+                                         <$> getPacketHeader
+                                         <*> (getERR $ pLen p)))
             | isOKP   p  = Just <$> (SResOK <$> getPacked)
             | otherwise  = return Nothing
-runL
+runS
     :: Connection
     -> ByteString
     -> (StreamTextResponse -> IO a)
     -> IO a
-runL (Connection s p _) qry io = do
+runS (Connection s p _) qry io = do
     liftIO $ sendQry s qry
     (r, p') <- runStateT (PB.decodeGet probResp) p
     let buildRes x = case x of
-                Just a -> io a
-                Nothing -> do
-                    (r', p'') <- runStateT (PB.decodeGet getResultSetHeader) p'
-                    let feedRows (ResultSetHeader rc rd _) = io $ SRes (StreamResultSetPackets rd (rowStream p'' $ payload rc))
-                    either throwIO feedRows r'
+            Just a -> io a
+            Nothing -> do
+                (r', p'') <- runStateT (PB.decodeGet getResultSetHeader) p'
+                let feedRows (ResultSetHeader rc rd _) =
+                        io $ SRes (StreamResultSetPackets
+                                    rd
+                                    (rowStream p'' $ payload rc))
+                either throwIO feedRows r'
     either throwIO buildRes r
-
-
 
 rowStream
     :: Producer ByteString IO ()
@@ -132,7 +141,9 @@ rowStream p (ColCount cc) =
             e <- lookAheadM getMaybePackedEOF
             case e of
                 Just _  -> return Nothing
-                Nothing -> Just <$> (Packed <$> getPacketHeader <*> (getRowData cc))
+                Nothing -> Just <$> (Packed
+                                     <$> getPacketHeader
+                                     <*> (getRowData cc))
 
         fetch prod = do
             (rRowData, p') <- liftIO $ runStateT (PB.decodeGet getRow) prod
@@ -174,4 +185,7 @@ sendAuth sock greet user pass db =
             login = P.runPut $ putAuth auth
             buffer = P.runPut $ mysqlPack 1 login
         in liftIO $ sendAll sock $ toStrict buffer
+
+
+--------------------------------------------------
 

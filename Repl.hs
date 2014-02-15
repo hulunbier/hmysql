@@ -53,7 +53,7 @@ repl conn = runInputT defaultSettings $ do
 
 showStream :: String -> Connection -> IO ()
 showStream qry conn =
-    runL conn (pack qry) $ do
+    runS conn (pack qry) $ do
         \res ->
             case res of
                 SRes (StreamResultSetPackets _ rows) ->
