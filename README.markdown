@@ -19,7 +19,7 @@ For demostration, a very simple MySQL client repl is provided.
 
 or `./dist/build/repl/repl -?` for more argvs.
 
-then, feet it some sqls,
+then, feed it with some sqls,
 
     Flags {host = "localhost", port = "3306", user = "root", pass = "", db = ""}
     Greeting
