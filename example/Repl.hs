@@ -1,12 +1,12 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 module Main where
 
-import           Connection
+import           Database.MySQL.HMySQL.Connection
 import           Control.Monad.Trans
 import           Data.ByteString.Char8    (pack)
 --import           Pipes
 --import qualified Pipes.Prelude            as PP
-import           Protocol
+import           Database.MySQL.HMySQL.Protocol
 import           System.Console.CmdArgs
 import           System.Console.Haskeline
 import qualified Text.Show.Pretty         as Pr

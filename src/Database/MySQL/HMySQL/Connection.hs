@@ -1,13 +1,13 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE OverloadedStrings  #-}
-module Connection
+module Database.MySQL.HMySQL.Connection
      ( ConnectInfo(..)
      , defaultConnectInfo
      , connectDB
      , Connection
      , StreamTextResponse(..)
      , StreamResultSetPackets(..)
-     , ResultSetNotFullyConsumed 
+     , ResultSetNotFullyConsumed
      , run
      , runS
      , withRows
@@ -16,28 +16,28 @@ module Connection
      )
 where
 
-import           Control.Applicative        ((<$>), (<*>))
-import           Control.Exception          (Exception, onException, throw,
-                                             throwIO)
+import           Control.Applicative            ((<$>), (<*>))
+import           Control.Exception              (Exception, onException, throw,
+                                                 throwIO)
 import           Control.Monad.Error
 import           Control.Monad.State.Strict
-import qualified Crypto.Hash.SHA1           as SHA1
+import qualified Crypto.Hash.SHA1               as SHA1
 import           Data.Binary.Get
-import qualified Data.Binary.Put            as P
-import           Data.Bits                  (xor)
-import           Data.ByteString            (ByteString)
-import qualified Data.ByteString            as B
-import           Data.ByteString.Char8      (pack)
-import           Data.ByteString.Lazy       (fromStrict, toStrict)
-import           Data.IORef                 (IORef (), newIORef, readIORef,
-                                             writeIORef)
+import qualified Data.Binary.Put                as P
+import           Data.Bits                      (xor)
+import           Data.ByteString                (ByteString)
+import qualified Data.ByteString                as B
+import           Data.ByteString.Char8          (pack)
+import           Data.ByteString.Lazy           (fromStrict, toStrict)
+import           Data.IORef                     (IORef (), newIORef, readIORef,
+                                                 writeIORef)
 import           Data.Typeable
+import           Database.MySQL.HMySQL.Protocol
 import           Network.Socket
-import           Network.Socket.ByteString  (sendAll)
+import           Network.Socket.ByteString      (sendAll)
 import           Pipes
-import qualified Pipes.Binary               as PB
-import qualified Pipes.Network.TCP          as PN
-import           Protocol
+import qualified Pipes.Binary                   as PB
+import qualified Pipes.Network.TCP              as PN
 
 data ConnectInfo = ConnectInfo
                { ciHost       :: String
@@ -69,8 +69,8 @@ data ConnFaliure = AuthFaliure ERR deriving (Typeable, Show)
 instance Exception ConnFaliure
 
 data Connection = Connection
-    { _cs        :: Socket
-    , _cp        :: BytesProducer
+    { _cs       :: Socket
+    , _cp       :: BytesProducer
     , connGreet :: Greeting}
 
 connectDB :: ConnectInfo -> IO Connection

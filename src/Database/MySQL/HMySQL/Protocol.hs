@@ -1,6 +1,6 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE OverloadedStrings  #-}
-module Protocol where
+module Database.MySQL.HMySQL.Protocol where
 
 import           Control.Applicative   ((*>), (<$>), (<*), (<*>))
 import           Control.Monad
