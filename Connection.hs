@@ -4,7 +4,8 @@
 module Connection where
 
 import           Control.Applicative        ((<$>), (<*>))
-import           Control.Exception          (Exception, onException, throw, throwIO)
+import           Control.Exception          (Exception, onException, throw,
+                                             throwIO)
 import           Control.Monad.Error
 import           Control.Monad.State.Strict
 import qualified Crypto.Hash.SHA1           as SHA1
@@ -15,6 +16,8 @@ import           Data.ByteString            (ByteString)
 import qualified Data.ByteString            as B
 import           Data.ByteString.Char8      (pack)
 import           Data.ByteString.Lazy       (fromStrict, toStrict)
+import           Data.IORef                 (IORef (), newIORef, readIORef,
+                                             writeIORef)
 import           Data.Typeable
 import           Network.Socket
 import           Network.Socket.ByteString  (sendAll)
@@ -40,7 +43,7 @@ data StreamResultSetPackets = StreamResultSetPackets
     , srRows    :: RowStream
     }
 
-data StreamTextResponse = SRes     StreamResultSetPackets
+data StreamTextResponse = SRes    StreamResultSetPackets
                         | SResErr (Packed ERR)
                         | SResOK  (Packed OK)
 
@@ -57,7 +60,6 @@ data Connection = Connection
     , cp        :: BytesProducer
     , connGreet :: Greeting}
 
---TODO close socket if we encounter exception
 connectDB :: ConnectInfo -> IO Connection
 connectDB (ConnectInfo host service db user pass bs nd) = do
     sock <- connSock
@@ -112,31 +114,38 @@ probResp = do
                                          <*> (getERR $ pLen p)))
             | isOKP   p  = Just <$> (SResOK <$> getPacked)
             | otherwise  = return Nothing
+
+data ResultSetNotFullyConsumed = ResultSetNotFullyConsumed deriving (Typeable, Show)
+instance Exception ResultSetNotFullyConsumed
 runS
     :: Connection
     -> ByteString
-    -> (StreamTextResponse -> IO a)
-    -> IO a
+    -> (StreamTextResponse -> IO ())
+    -> IO ()
 runS (Connection s p _) qry io = do
-    liftIO $ sendQry s qry
+    sendQry s qry
     (r, p') <- runStateT (PB.decodeGet probResp) p
     let buildRes x = case x of
             Just a -> io a
             Nothing -> do
+                ref <- newIORef False
                 (r', p'') <- runStateT (PB.decodeGet getResultSetHeader) p'
-                let feedRows (ResultSetHeader rc rd _) =
+                let feedRows (ResultSetHeader rc rd _) = do
                         io $ SRes (StreamResultSetPackets
                                     rd
-                                    (rowStream p'' $ payload rc))
+                                    (rowStream p'' (payload rc) (ref)))
+                        drained <- readIORef ref
+                        when (not drained) $ throwIO ResultSetNotFullyConsumed
                 either throwIO feedRows r'
     either throwIO buildRes r
 
 rowStream
-    :: Producer ByteString IO ()
+    :: BytesProducer
     -> ColCount
+    -> IORef Bool
     -> Producer (Packed RowData) IO ()
 
-rowStream p (ColCount cc) =
+rowStream p (ColCount cc) st =
     let getRow = do
             e <- lookAheadM getMaybePackedEOF
             case e of
@@ -149,7 +158,7 @@ rowStream p (ColCount cc) =
             (rRowData, p') <- liftIO $ runStateT (PB.decodeGet getRow) prod
             case rRowData of
                 Right (Just rd) -> yield rd >> fetch p'
-                Right Nothing   -> return ()
+                Right Nothing   -> liftIO $ writeIORef st True >> return ()
                 Left e          -> throw e
     in fetch p
 
@@ -180,11 +189,13 @@ sendAuth
 sendAuth sock greet user pass db =
         let salt = B.append (salt1 greet) (salt2 greet)
             scambleBuf = scramble salt pass
-            auth = Auth defaultClientCap defaultClientMaxPacketSize defaultClientCharset
+            auth = Auth defaultClientCap
+                        defaultClientMaxPacketSize
+                        defaultClientCharset
                         (fromStrict user) scambleBuf db
             login = P.runPut $ putAuth auth
             buffer = P.runPut $ mysqlPack 1 login
-        in liftIO $ sendAll sock $ toStrict buffer
+        in sendAll sock $ toStrict buffer
 
 
 --------------------------------------------------

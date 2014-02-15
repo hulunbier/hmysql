@@ -29,7 +29,7 @@ main = do
 repl :: Connection -> IO ()
 repl conn = runInputT defaultSettings $ do
         outputStrLn (Pr.ppShow $ connGreet conn) -- greeting packet, diagnostics
-        loop 
+        loop
         where loop = do
                 minput <- getInputLine "hmysql> "
                 maybe (outputStrLn "Bye.") exec minput
@@ -57,7 +57,7 @@ showStream qry conn =
         \res ->
             case res of
                 SRes (StreamResultSetPackets _ rows) ->
-                        --runEffect (rows >-> PP.take 1 >-> PP.print)
+                        --runEffect (rows >-> PP.take 2 >-> PP.print)
                         withRows rows $ \r -> runInputT defaultSettings $ outputStrLn $ Pr.ppShow r
                         --withRows rows (cosnt $ return ())
                 SResOK x ->  print $ Pr.ppShow x

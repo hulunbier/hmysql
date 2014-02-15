@@ -9,7 +9,7 @@ import           Data.Binary.Get
 import qualified Data.Binary.Put       as P
 import           Data.Bits
 import qualified Data.ByteString       as B
-import           Data.ByteString.Char8 hiding(reverse)
+import           Data.ByteString.Char8 hiding (reverse)
 import qualified Data.ByteString.Lazy  as L
 
 -- types
@@ -83,7 +83,7 @@ data ColDef = ColDef
     , fdecimals                           :: !Word8
     } deriving Show
 
-data ResultSetHeader = ResultSetHeader 
+data ResultSetHeader = ResultSetHeader
     { rhColCount :: !(Packed ColCount)
     , rhColDefs  :: ![Packed ColDef]
     , rhEOF1     :: !(Packed EOF)
@@ -229,7 +229,7 @@ getResultSetHeader = do
       colCount@(Packed _ (ColCount c)) <- get
       colDef <- getMany c
       eof1 <- get
-      return $ ResultSetHeader colCount colDef eof1 
+      return $ ResultSetHeader colCount colDef eof1
 
 -- go strict like getMany
 endBy :: Get a -> Get (Maybe b) -> Get ([a], b)
@@ -294,7 +294,7 @@ client_connect_with_db = 0x00000008
 
 client_protocol_41, client_transactions, client_secure_connection :: Word32
 client_protocol_41     = 0x00000200
-client_transactions    = 0x00002000 
+client_transactions    = 0x00002000
 client_secure_connection = 0x00008000
 
 
@@ -303,7 +303,7 @@ defaultClientCap :: Word32
 defaultClientCap =  client_long_password
                 .|. client_long_flag
                 .|. client_connect_with_db
-                .|. client_protocol_41 
+                .|. client_protocol_41
                 .|. client_transactions
                 .|. client_secure_connection
 
@@ -340,7 +340,7 @@ getPacked :: Binary a => Get (Packed a)
 getPacked = Packed <$> get <*> get
 
 putPacked :: Binary a => Packed a -> Put
-putPacked (Packed h b) = put h >> put b  -- TODO this is useless
+putPacked (Packed h b) = put h >> put b  -- TODO buggy
 
 --
 instance Binary LenEncStr where
