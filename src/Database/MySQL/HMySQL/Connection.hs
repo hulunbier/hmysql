@@ -4,6 +4,7 @@ module Database.MySQL.HMySQL.Connection
      ( ConnectInfo(..)
      , defaultConnectInfo
      , connectDB
+     , closeConn
      , Connection
      , StreamTextResponse(..)
      , StreamResultSetPackets(..)
@@ -104,6 +105,8 @@ connectDB (ConnectInfo host service db user pass bs nd) = do
     parseAuthAck = runStateT (PB.decodeGet getPacket)
     greeting =  PB.decodeGet (decodeGreeting <$> getPacket)
 
+closeConn :: Connection -> IO ()
+closeConn (Connection s _ _) = sClose s
 
 run :: Connection -> ByteString -> (TextResponse -> IO a) -> IO a
 run (Connection s p _) qry io = do
