@@ -1,7 +1,20 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE OverloadedStrings  #-}
-{-# LANGUAGE RankNTypes         #-}
-module Connection where
+module Connection
+     ( ConnectInfo(..)
+     , defaultConnectInfo
+     , connectDB
+     , Connection
+     , StreamTextResponse(..)
+     , StreamResultSetPackets(..)
+     , ResultSetNotFullyConsumed 
+     , run
+     , runS
+     , withRows
+     , connGreet -- TODO
+     , ConnFaliure
+     )
+where
 
 import           Control.Applicative        ((<$>), (<*>))
 import           Control.Exception          (Exception, onException, throw,
@@ -56,8 +69,8 @@ data ConnFaliure = AuthFaliure ERR deriving (Typeable, Show)
 instance Exception ConnFaliure
 
 data Connection = Connection
-    { cs        :: Socket
-    , cp        :: BytesProducer
+    { _cs        :: Socket
+    , _cp        :: BytesProducer
     , connGreet :: Greeting}
 
 connectDB :: ConnectInfo -> IO Connection
@@ -96,9 +109,7 @@ run :: Connection -> ByteString -> (TextResponse -> IO a) -> IO a
 run (Connection s p _) qry io = do
     sendQry s qry
     (r,_) <- runStateT (PB.decodeGet getTextResponse) p
-    case r of
-        Right g -> io g
-        Left e  -> throwIO e
+    either throwIO io r
 
 withRows :: RowStream -> (RowData -> IO ()) -> IO ()
 withRows rows io = runEffect $ for rows $ lift . io . payload

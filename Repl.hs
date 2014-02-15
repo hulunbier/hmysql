@@ -9,26 +9,20 @@ import           Data.ByteString.Char8    (pack)
 import           Protocol
 import           System.Console.CmdArgs
 import           System.Console.Haskeline
---import           System.Posix
 import qualified Text.Show.Pretty         as Pr
 
 main :: IO ()
 main = do
     opts <- cmdArgs defalutFlags
-    print opts
-    -- _ <- installHandler sigPIPE Ignore Nothing
-    conn <- connectDB $ defaultConnectInfo
-                            { ciHost     = host opts
-                            , ciSerivce  = port opts
-                            , ciUser     = user opts
-                            , ciPassword = pass opts
-                            , ciDatabase = db opts
-                            }
+    showOpts opts
+    conn <- connectDB $ buildConnectInfo opts 
     repl conn
 
 repl :: Connection -> IO ()
 repl conn = runInputT defaultSettings $ do
+        outputStrLn "--- Greeting message from server ---"
         outputStrLn (Pr.ppShow $ connGreet conn) -- greeting packet, diagnostics
+        outputStrLn "--- End of greeting message ---"
         loop
         where loop = do
                 minput <- getInputLine "hmysql> "
@@ -82,4 +76,17 @@ defalutFlags = Flags
     &= summary "Silly MySQL client"
     &= program "repl"
 
+showOpts :: Flags -> IO ()
+showOpts opts = do
+    putStrLn "\n--- Options used ---\n"
+    print opts
+    putStrLn "\n--- End of Options ---\n"
 
+buildConnectInfo :: Flags -> ConnectInfo
+buildConnectInfo opts = defaultConnectInfo
+                    { ciHost     = host opts
+                    , ciSerivce  = port opts
+                    , ciUser     = user opts
+                    , ciPassword = pass opts
+                    , ciDatabase = db opts
+                    }
