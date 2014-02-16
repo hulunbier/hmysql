@@ -36,7 +36,8 @@ repl conn = runInputT defaultSettings $ do
                                 msg <- liftIO $ run conn (pack rest ) (return . Pr.ppShow)
                                 outputStrLn msg
                                 loop
-                            x -> do
+                            [] -> loop
+                            x  -> do
                                 msg <- liftIO $ run conn (pack x) showRow
                                 outputStrLn msg
                                 loop
