@@ -18,8 +18,8 @@ module Database.MySQL.HMySQL.Connection
 where
 
 import           Control.Applicative            ((<$>), (<*>))
-import           Control.Exception              (Exception, onException, throw,
-                                                 throwIO)
+import           Control.Exception              (Exception, bracketOnError,
+                                                 throw, throwIO)
 import           Control.Monad.Error
 import           Control.Monad.State.Strict
 import qualified Crypto.Hash.SHA1               as SHA1
@@ -30,7 +30,7 @@ import           Data.ByteString                (ByteString)
 import qualified Data.ByteString                as B
 import           Data.ByteString.Char8          (pack)
 import           Data.ByteString.Lazy           (fromStrict, toStrict)
-import           Data.IORef                     (IORef (), newIORef, readIORef,
+import           Data.IORef                     (IORef, newIORef, readIORef,
                                                  writeIORef)
 import           Data.Typeable
 import           Database.MySQL.HMySQL.Protocol
@@ -71,39 +71,38 @@ instance Exception ConnFaliure
 
 data Connection = Connection
     { _cs       :: Socket
+    -- Not wrap BytesProducer within sth like IORef here
+    -- or thread this state around, because after each invocation
+    -- of 'run' or 'runS', reponses (bytes from server) are fully 
+    -- consumed.
+
+    -- This looks a little weird, though.
+
+    -- TODO But what if we should provide some function like "fetchRow conn"?
+
     , _cp       :: BytesProducer
     , connGreet :: Greeting}
 
 connectDB :: ConnectInfo -> IO Connection
-connectDB (ConnectInfo host service db user pass bs nd) = do
-    sock <- connSock
-    onException (do
-        (res, prod) <- parseGreeting sock bs
-        case res of
-            Right g ->
-                sendAuth sock g (pack user) (pack pass) (pack db)
-                >> parseAuthAck prod
-                >>= \(x, p') ->
-                    let buildConn packet
-                            | isOKP packet = Connection sock p' g
-                            | otherwise =
-                                throw (AuthFaliure $
-                                        runGet (getERR (pLen packet))
-                                            (pBody packet))
-                    in return $ either throw buildConn x
-            Left e -> throwIO e)
-        $ sClose sock
-    where
-    connSock = do
-            addrs <- getAddrInfo Nothing (Just host) (Just service)
-            let addr = head addrs
-            sock <- socket (addrFamily $ head addrs) Stream defaultProtocol
-            setSocketOption sock NoDelay nd
-            connect sock (addrAddress addr)
-            return sock
-    parseGreeting s sz = runStateT greeting (PN.fromSocket s sz)
-    parseAuthAck = runStateT (PB.decodeGet getPacket)
-    greeting =  PB.decodeGet (decodeGreeting <$> getPacket)
+connectDB (ConnectInfo host service db user pass bufSize nodelay) =
+    bracketOnError connSock sClose
+        (\sock -> do
+            (res, prod) <- parseGreeting sock bufSize
+            either throwIO (\g -> doAuth g sock prod user pass db) res
+        )
+      where
+        connSock = do
+                addrs <- getAddrInfo Nothing (Just host) (Just service)
+                let addr = head addrs
+                sock <- socket (addrFamily addr)
+                            (addrSocketType addr)
+                            (addrProtocol addr)
+                setSocketOption sock NoDelay nodelay 
+                connect sock (addrAddress addr)
+                -- exceptions here
+                return sock
+        parseGreeting s sz = runStateT greeting (PN.fromSocket s sz)
+        greeting =  PB.decodeGet (decodeGreeting <$> getPacket)
 
 closeConn :: Connection -> IO ()
 closeConn (Connection s _ _) = sClose s
@@ -122,15 +121,16 @@ probResp = do
     pkt <- lookAhead getPacket
     build pkt
     where build p
-            | isErrP  p  = Just <$> (SResErr
-                                    <$> (Packed
-                                         <$> getPacketHeader
-                                         <*> (getERR $ pLen p)))
+            | isErrP  p  = Just <$> SResErr
+                                <$> (Packed
+                                        <$> getPacketHeader
+                                        <*> getERR (pLen p))
             | isOKP   p  = Just <$> (SResOK <$> getPacked)
             | otherwise  = return Nothing
 
 data ResultSetNotFullyConsumed = ResultSetNotFullyConsumed deriving (Typeable, Show)
 instance Exception ResultSetNotFullyConsumed
+
 runS
     :: Connection
     -> ByteString
@@ -147,9 +147,9 @@ runS (Connection s p _) qry io = do
                 let feedRows (ResultSetHeader rc rd _) = do
                         io $ SRes (StreamResultSetPackets
                                     rd
-                                    (rowStream p'' (payload rc) (ref)))
+                                    (rowStream p'' (payload rc) ref))
                         drained <- readIORef ref
-                        when (not drained) $ throwIO ResultSetNotFullyConsumed
+                        unless drained $ throwIO ResultSetNotFullyConsumed
                 either throwIO feedRows r'
     either throwIO buildRes r
 
@@ -166,7 +166,7 @@ rowStream p (ColCount cc) st =
                 Just _  -> return Nothing
                 Nothing -> Just <$> (Packed
                                      <$> getPacketHeader
-                                     <*> (getRowData cc))
+                                     <*> getRowData cc)
 
         fetch prod = do
             (rRowData, p') <- liftIO $ runStateT (PB.decodeGet getRow) prod
@@ -193,7 +193,6 @@ scramble salt pass
                             $ B.append salt
                             $ SHA1.hash sha1pass
 sendAuth
--- :: MonadIO m =>
     :: Socket
     -> Greeting
     -> ByteString
@@ -208,9 +207,33 @@ sendAuth sock greet user pass db =
                         defaultClientCharset
                         (fromStrict user) scambleBuf db
             login = P.runPut $ putAuth auth
+            -- sequence number is always 1 while sending auth to server
             buffer = P.runPut $ mysqlPack 1 login
         in sendAll sock $ toStrict buffer
 
+doAuth :: Greeting
+    -> Socket
+    -> BytesProducer
+    -> String
+    -> String
+    -> String
+    -> IO Connection
+doAuth g sock p user pass db = 
+    let buildConn packet p'
+            | isOKP packet = Connection sock p' g
+            | otherwise =
+                throw $ AuthFaliure (decodeErr packet)
+    in 
+    sendAuth sock g (pack user) (pack pass) (pack db)
+    >> parseAuthAck p
+    >>= \(x, p') -> return $ either throw buildConn x p'
+
+parseAuthAck :: BytesProducer 
+             -> IO (Either PB.DecodingError Packet, BytesProducer)
+parseAuthAck = runStateT (PB.decodeGet getPacket)
+
+decodeErr :: Packet -> ERR 
+decodeErr pkt = runGet (getERR $ pLen pkt) (pBody pkt)
 
 --------------------------------------------------
 
