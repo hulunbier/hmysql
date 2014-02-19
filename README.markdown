@@ -9,11 +9,9 @@ Currently, it is just a very basic and naive implementation.
 # Build & Play
 
 
-`cabal build` (Windows not supported, yet)
+`cabal sandbox init && cabal install --only-dependencies && cabal build` (Windows not supported, yet)
 
-(If in trouble, I suggest using *cabal sanbox*)
-
-For demostration, a very simple MySQL client repl is provided.
+For demonstration, a very simple MySQL client repl is provided.
 
 `./dist/build/repl/repl -u$username --pass$password -d$database`
 
