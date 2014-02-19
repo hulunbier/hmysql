@@ -9,7 +9,7 @@ Currently, it is just a very basic and naive implementation.
 # Build & Play
 
 
-`cabal build`
+`cabal build` (Windows not supported, yet)
 
 (If in trouble, I suggest using *cabal sanbox*)
 
