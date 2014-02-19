@@ -21,8 +21,8 @@ library
   -- other-modules:       
   -- other-extensions:    
   ghc-options:         -O2 -Wall
-  build-depends:       base >=4.6 && <4.7, bytestring, binary, pipes-network, pipes-binary, cryptohash, mtl, network, pipes
-  --, bytestring (>=0.10.0.2)
+  build-depends:       base >=4.6 && <4.7, bytestring, binary, pipes-binary, cryptohash, mtl, network, pipes, pipes-bytestring
+
   hs-source-dirs:      src
   default-language:    Haskell2010
 
@@ -30,7 +30,7 @@ executable repl
   main-is:             Repl.hs
   -- other-modules:       
   other-extensions:    OverloadedStrings 
-  build-depends:       base >=4.6 && <4.7, haskeline, hmysql, mtl, bytestring, binary, network, pipes-network, pipes-binary, pipes, cryptohash, pretty-show,unix, cmdargs
+  build-depends:       base >=4.6 && <4.7, haskeline, hmysql, mtl, bytestring, binary, network, pipes-binary, pipes, cryptohash, pretty-show,unix, cmdargs
   ghc-options:         -O2 -Wall
   -- -prof -auto-all -caf-all -fforce-recomp
   hs-source-dirs:      example

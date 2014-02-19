@@ -17,6 +17,8 @@ For demostration, a very simple MySQL client repl is provided.
 
 `./dist/build/repl/repl -u$username --pass$password -d$database`
 
+or `./dist/build/repl/repl -s/var/run/mysqld/mysqld.sock`
+
 or `./dist/build/repl/repl -?` for more argvs.
 
 then, feed it with some sqls,

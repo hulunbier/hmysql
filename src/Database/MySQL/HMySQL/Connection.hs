@@ -34,20 +34,19 @@ import           Data.IORef                     (IORef, newIORef, readIORef,
                                                  writeIORef)
 import           Data.Typeable
 import           Database.MySQL.HMySQL.Protocol
-import           Network.Socket
-import           Network.Socket.ByteString      (sendAll)
+import           Network                        (PortID (Service), connectTo)
 import           Pipes
 import qualified Pipes.Binary                   as PB
-import qualified Pipes.Network.TCP              as PN
+import qualified Pipes.ByteString               as PBS
+import           System.IO                      (Handle, hClose)
 
 data ConnectInfo = ConnectInfo
                { ciHost       :: String
-               , ciSerivce    :: String
+               , ciPort       :: PortID
                , ciDatabase   :: String
                , ciUser       :: String
                , ciPassword   :: String
                , ciBufferSize :: Int
-               , ciNoDelay    :: Int
                } deriving Show
 
 type RowStream = Producer (Packed RowData) IO ()
@@ -62,7 +61,7 @@ data StreamTextResponse = SRes    StreamResultSetPackets
                         | SResOK  (Packed OK)
 
 defaultConnectInfo :: ConnectInfo
-defaultConnectInfo = ConnectInfo "localhost" "3306" "" "root" "" 4096 1
+defaultConnectInfo = ConnectInfo "localhost" (Service "3306") "" "root" "" 4096
 
 type BytesProducer = Producer ByteString IO ()
 
@@ -70,10 +69,10 @@ data ConnFaliure = AuthFaliure ERR deriving (Typeable, Show)
 instance Exception ConnFaliure
 
 data Connection = Connection
-    { _cs       :: Socket
+    { _cs       :: Handle
     -- Not wrap BytesProducer within sth like IORef here
     -- or thread this state around, because after each invocation
-    -- of 'run' or 'runS', reponses (bytes from server) are fully 
+    -- of 'run' or 'runS', reponses (bytes from server) are fully
     -- consumed.
 
     -- This looks a little weird, though.
@@ -84,28 +83,19 @@ data Connection = Connection
     , connGreet :: Greeting}
 
 connectDB :: ConnectInfo -> IO Connection
-connectDB (ConnectInfo host service db user pass bufSize nodelay) =
-    bracketOnError connSock sClose
+connectDB (ConnectInfo host portId db user pass bufSize ) =
+    bracketOnError connSock hClose
         (\sock -> do
             (res, prod) <- parseGreeting sock bufSize
             either throwIO (\g -> doAuth g sock prod user pass db) res
         )
       where
-        connSock = do
-                addrs <- getAddrInfo Nothing (Just host) (Just service)
-                let addr = head addrs
-                sock <- socket (addrFamily addr)
-                            (addrSocketType addr)
-                            (addrProtocol addr)
-                setSocketOption sock NoDelay nodelay 
-                connect sock (addrAddress addr)
-                -- exceptions here
-                return sock
-        parseGreeting s sz = runStateT greeting (PN.fromSocket s sz)
+        connSock = connectTo host portId
         greeting =  PB.decodeGet (decodeGreeting <$> getPacket)
+        parseGreeting s sz = runStateT greeting (PBS.hGetSome sz s )
 
 closeConn :: Connection -> IO ()
-closeConn (Connection s _ _) = sClose s
+closeConn (Connection s _ _) = hClose s
 
 run :: Connection -> ByteString -> (TextResponse -> IO a) -> IO a
 run (Connection s p _) qry io = do
@@ -177,12 +167,12 @@ rowStream p (ColCount cc) st =
     in fetch p
 
 
-sendQry :: Socket -> ByteString -> IO ()
+sendQry :: Handle -> ByteString -> IO ()
 sendQry s qry =
     let cmd    = CmdQry $ fromStrict qry
         cmdStr = P.runPut $ putMySqlCmd cmd
         buffer = P.runPut $ mysqlPack 0 cmdStr
-    in sendAll s $ toStrict buffer
+    in B.hPut s $ toStrict buffer
 
 scramble :: ByteString -> ByteString -> ByteString
 scramble salt pass
@@ -193,13 +183,13 @@ scramble salt pass
                             $ B.append salt
                             $ SHA1.hash sha1pass
 sendAuth
-    :: Socket
+    :: Handle
     -> Greeting
     -> ByteString
     -> ByteString
     -> ByteString
     -> IO ()
-sendAuth sock greet user pass db =
+sendAuth h greet user pass db =
         let salt = B.append (salt1 greet) (salt2 greet)
             scambleBuf = scramble salt pass
             auth = Auth defaultClientCap
@@ -209,30 +199,30 @@ sendAuth sock greet user pass db =
             login = P.runPut $ putAuth auth
             -- sequence number is always 1 while sending auth to server
             buffer = P.runPut $ mysqlPack 1 login
-        in sendAll sock $ toStrict buffer
+        in B.hPut h $ toStrict buffer
 
 doAuth :: Greeting
-    -> Socket
+    -> Handle
     -> BytesProducer
     -> String
     -> String
     -> String
     -> IO Connection
-doAuth g sock p user pass db = 
+doAuth g h p user pass db =
     let buildConn packet p'
-            | isOKP packet = Connection sock p' g
+            | isOKP packet = Connection h p' g
             | otherwise =
                 throw $ AuthFaliure (decodeErr packet)
-    in 
-    sendAuth sock g (pack user) (pack pass) (pack db)
+    in
+    sendAuth h g (pack user) (pack pass) (pack db)
     >> parseAuthAck p
     >>= \(x, p') -> return $ either throw buildConn x p'
 
-parseAuthAck :: BytesProducer 
+parseAuthAck :: BytesProducer
              -> IO (Either PB.DecodingError Packet, BytesProducer)
 parseAuthAck = runStateT (PB.decodeGet getPacket)
 
-decodeErr :: Packet -> ERR 
+decodeErr :: Packet -> ERR
 decodeErr pkt = runGet (getERR $ pLen pkt) (pBody pkt)
 
 --------------------------------------------------

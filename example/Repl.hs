@@ -1,21 +1,22 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 module Main where
 
-import           Database.MySQL.HMySQL.Connection
 import           Control.Monad.Trans
-import           Data.ByteString.Char8    (pack)
+import           Data.ByteString.Char8            (pack)
+import           Database.MySQL.HMySQL.Connection
 --import           Pipes
 --import qualified Pipes.Prelude            as PP
 import           Database.MySQL.HMySQL.Protocol
+import           Network                          (PortID (..))
 import           System.Console.CmdArgs
 import           System.Console.Haskeline
-import qualified Text.Show.Pretty         as Pr
+import qualified Text.Show.Pretty                 as Pr
 
 main :: IO ()
 main = do
     opts <- cmdArgs defalutFlags
     showOpts opts
-    conn <- connectDB $ buildConnectInfo opts 
+    conn <- connectDB $ buildConnectInfo opts
     repl conn
 
 repl :: Connection -> IO ()
@@ -60,19 +61,21 @@ showStream qry conn =
 
 data Flags = Flags
     { host :: String
-    , port :: String
+    , port :: Int
     , user :: String
     , pass :: String
     , db   :: String
+    , sock :: String
     } deriving (Show, Data, Typeable)
 
 defalutFlags :: Flags
 defalutFlags = Flags
     { host = "localhost" &= typ "hostname"
-    , port = "3306"      &= typ "port"
+    , port = 3306        &= typ "port"
     , user = "root"      &= typ "username"
     , pass = ""          &= typ "password"
     , db   = ""          &= typ "database"
+    , sock = ""          &= typ "unix socket file"
     }
     &= summary "Silly MySQL client"
     &= program "repl"
@@ -86,7 +89,10 @@ showOpts opts = do
 buildConnectInfo :: Flags -> ConnectInfo
 buildConnectInfo opts = defaultConnectInfo
                     { ciHost     = host opts
-                    , ciSerivce  = port opts
+                    , ciPort     = let s = (sock opts)
+                                   in if s /= ""
+                                      then (UnixSocket s)
+                                      else (PortNumber $ 3306)
                     , ciUser     = user opts
                     , ciPassword = pass opts
                     , ciDatabase = db opts
