@@ -34,7 +34,12 @@ data LenEncStr = LCS B.ByteString | Null deriving Show
 
 -- general packets
 
-data OK = OK deriving Show
+data OK = OK 
+    { okAffectedRows :: Int
+    , okLastInsertID :: Int
+    , okStatus       :: Word16
+    , okWarnings     :: Word16
+    } deriving Show
 
 data ERR = ERR
     { errCode  :: !Word16
@@ -293,15 +298,16 @@ client_long_flag       = 0x00000004
 client_connect_with_db = 0x00000008
 
 client_protocol_41, client_transactions, client_secure_connection :: Word32
-client_protocol_41     = 0x00000200
-client_transactions    = 0x00002000
+client_protocol_41       = 0x00000200
+client_transactions      = 0x00002000
 client_secure_connection = 0x00008000
+
+client_plugin_auth :: Word32
+client_plugin_auth       = 0x00080000
 
 
 defaultClientCap :: Word32
---defaultClientCap = 0x0002a28f :: Word32
 defaultClientCap =  client_long_password
-                .|. client_long_flag
                 .|. client_connect_with_db
                 .|. client_protocol_41
                 .|. client_transactions
@@ -342,6 +348,25 @@ getPacked = Packed <$> get <*> get
 putPacked :: Binary a => Packed a -> Put
 putPacked (Packed h b) = put h >> put b  -- TODO buggy
 
+getPackedS :: Binary a => Word8 -> Get (Packed a)
+getPackedS seqNum = Packed <$> (getPacketHeaderS seqNum) <*> get
+
+getPackedC :: LenConstrained a => Word8 -> Get (Packed a)
+getPackedC seqNum = do 
+    h <- getPacketHeaderS seqNum
+    a <- getLenConstrained (hLen h)
+    return $ Packed h a
+
+getPacketHeaderS :: Word8 -> Get PacketHeader
+getPacketHeaderS s = do 
+        len <- getWord24 
+        s'   <- getWord8
+        if s /= s'
+          then fail ("sequence number mismatch, expecting "
+                        ++ show s
+                        ++ ", got " ++ show s'
+                    )
+          else return $ PacketHeader len s 
 --
 instance Binary LenEncStr where
     put = putLenEncStr
@@ -373,7 +398,11 @@ instance Binary OK where
     put = putOK
 
 getOK :: Get OK
-getOK = getWord8 >> return OK
+--TODO verify first byte 
+getOK = OK <$> (getWord8 *> getLenEncInt)
+           <*> getLenEncInt 
+           <*> getWord16le
+           <*> getWord16le
 
 putOK :: OK -> P.Put
 putOK _ = putWord8 0x00
@@ -387,6 +416,40 @@ getERR len = do
     st  <- getLazyByteString 5
     msg <- getLazyByteString $ fromIntegral (len - 9)
     return (ERR c st msg)
+
+
+--instance Binary ERR where
+--    get = undefined
+--    put = undefined
+
+class LenConstrained a where
+    getLenConstrained :: Int -> Get a
+
+instance LenConstrained ERR where
+    getLenConstrained = getERR
+
+instance LenConstrained OK where
+    getLenConstrained = const getOK
+
+instance LenConstrained Greeting where
+    getLenConstrained = const getGreeting
+
+
+newtype AuthAck = AuthAck (Either ERR OK)
+
+instance LenConstrained AuthAck where
+    getLenConstrained = getAuthAck
+
+getAuthAck :: Int -> Get AuthAck
+getAuthAck len = do
+        f <- lookAhead getWord8
+        if f == 0x00
+          then do 
+                ok <- getOK
+                return $ AuthAck (Right ok) 
+          else do
+                err <- getERR len 
+                return $ AuthAck (Left err)
 --
 instance Binary EOF where
     put (EOF w s) = do
@@ -439,11 +502,12 @@ getGreeting = do
     st <- getWord16le
     skip 13
     s2 <- getLazyByteStringNul
+    _ <- getLazyByteStringNul
     return $ Greeting p (L.toStrict v) t (L.toStrict s1) c l st $ L.toStrict s2
 
-instance Binary Greeting where
-    get = getGreeting
-    put = putGreeting
+--instance Binary Greeting where
+--    get = getGreeting
+--    put = putGreeting
 
 --
 
@@ -530,3 +594,5 @@ CLIENT_PLUGIN_AUTH 0x00080000
 CLIENT_CONNECT_ATTRS 0x00100000
 CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA 0x00200000
 --}
+
+
