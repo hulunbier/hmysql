@@ -4,12 +4,13 @@
 module Database.MySQL.HMySQL.NewConnection
 where
 
-import           Control.Applicative            ((<$>))
+import           Control.Applicative            ((<$>), (<*>))
 import           Control.Exception              (Exception, bracketOnError,
                                                  throw, throwIO)
 import           Control.Monad.Error
 import           Control.Monad.State.Strict
 import qualified Crypto.Hash.SHA1               as SHA1
+import           Data.Binary.Get
 import qualified Data.Binary.Put                as P
 import           Data.Bits                      (xor)
 import           Data.ByteString                (ByteString)
@@ -37,23 +38,25 @@ data ConnState = ConnState
     }
 
 data ConnectInfo = ConnectInfo
-               { ciHost       :: String
-               , ciPort       :: PortID
-               , ciDatabase   :: String
-               , ciUser       :: String
-               , ciPassword   :: String
-               , ciBufferSize :: Int
-               } deriving Show
+    { ciHost       :: String
+    , ciPort       :: PortID
+    , ciDatabase   :: String
+    , ciUser       :: String
+    , ciPassword   :: String
+    , ciBufferSize :: Int
+    }
+    deriving Show
 
 defaultConnectInfo :: ConnectInfo
 defaultConnectInfo = ConnectInfo "localhost" (Service "3306") "" "root" "" 4096
 
 data Connection = Connection (IORef (ConnState, ConnectInfo))
 
-newtype HMySQL a = HMySQL {
+newtype HMySQL a = HMySQL
+    {
       runMysql :: ReaderT ConnectInfo (StateT ConnState IO) a
-    } deriving (Monad, MonadIO, MonadReader ConnectInfo,
-                MonadState ConnState)
+    }
+    deriving (Monad, MonadIO, MonadReader ConnectInfo, MonadState ConnState)
 
 resetSeqNum :: HMySQL ()
 resetSeqNum = modify (\x -> x {csSeqNum = 0})
@@ -91,11 +94,25 @@ run' :: ByteString -> (TextResponse -> IO a) -> HMySQL a
 run' qry io = do
     sendQry qry
     p <- gets csProd
-    (r,_) <- liftIO $ runStateT (PB.decodeGet getTextResponse) p
-    either (liftIO . throwIO) (liftIO . io) r
+    (r,p') <- liftIO $ decode getTextResponse p
+    resetProducer p'
+    liftIO $ io r
 
 withRows :: RowStream -> (RowData -> IO ()) -> IO ()
 withRows rows io = runEffect $ for rows $ lift . io . payload
+
+data ResultSetNotFullyConsumed = ResultSetNotFullyConsumed deriving (Typeable, Show)
+instance Exception ResultSetNotFullyConsumed
+
+data StreamResultSetPackets = StreamResultSetPackets
+    { srColDefs :: [Packed ColDef]
+    , srRows    :: RowStream
+    }
+
+data StreamTextResponse = SRes    StreamResultSetPackets
+                        | SResErr ERR
+                        | SResOK  OK
+
 
 
 dialog :: HMySQL a -> HMySQL a
@@ -133,6 +150,9 @@ sendAuth auth = do
 incrSeqNum :: HMySQL ()
 incrSeqNum = modify (\x -> x {csSeqNum = csSeqNum x + 1})
 
+resetProducer :: BytesProducer -> HMySQL ()
+resetProducer p = modify (\x -> x {csProd = p})
+
 readPacket :: (LenConstrained a) => HMySQL a
 readPacket = do
     p <- gets csProd
@@ -159,3 +179,59 @@ scramble salt pass
                   withSalt = SHA1.hash
                             $ B.append salt
                             $ SHA1.hash sha1pass
+
+runS :: Connection -> ByteString -> (StreamTextResponse -> IO a) -> IO a
+runS (Connection ref ) qry io = do
+    (cs, ci) <- readIORef ref
+    (a, cs') <- runStateT (runReaderT (runMysql $ dialog (runS' qry io)) ci) cs 
+--    writeIORef ref (cs', ci)
+    return a
+
+decode :: Get t -> Producer ByteString IO x -> IO (t, Producer ByteString IO x)
+decode a p = do
+      (r, p') <- runStateT (PB.decodeGet a ) p
+      either throwIO (\v -> return (v,  p') ) r
+
+runS':: ByteString -> (StreamTextResponse -> IO a ) -> HMySQL a 
+runS' qry io = do
+    sendQry qry
+    p <- gets csProd
+    (respHeader ,p') <- liftIO $ decode getResultSetHeaderS p
+    resetProducer p'
+    liftIO $ do 
+        case respHeader of
+            RespHCC rsh -> do
+                ref <- newIORef False
+                let feedRows (ResultSetHeader rc rd _) = do
+                        a <- io $ SRes (StreamResultSetPackets
+                                    rd
+                                    (rowStream p' (payload rc) ref))
+                        r <- readIORef ref
+                        case r of
+                            False -> throwIO ResultSetNotFullyConsumed
+                            True  -> return a
+                feedRows rsh
+            RespHOK  a -> io (SResOK $ payload a)
+            RespHERR a -> io (SResErr $ payload a)
+    where
+
+    rowStream :: BytesProducer -> ColCount -> IORef Bool -> RowStream 
+
+    rowStream p (ColCount cc) st =
+        let getRow = do
+                e <- lookAheadM getMaybePackedEOF
+                case e of
+                    Just _  -> return Nothing
+                    Nothing -> Just <$> (Packed
+                                        <$> getPacketHeader
+                                        <*> getRowData cc)
+
+            fetch prod = do
+                (rRowData, p') <- liftIO $ runStateT (PB.decodeGet getRow) prod
+ --               lift $ resetProducer p'
+                case rRowData of
+                    Right (Just rd) -> yield rd >> fetch p'
+                    Right Nothing   -> liftIO $ writeIORef st True >> return ()
+                    Left e          -> throw e
+        in fetch p
+

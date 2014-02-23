@@ -17,7 +17,7 @@ build-type:          Simple
 cabal-version:       >=1.10
 
 library
-  exposed-modules:     Database.MySQL.HMySQL.Protocol, Database.MySQL.HMySQL.Connection, Database.MySQL.HMySQL.NewConnection
+  exposed-modules:     Database.MySQL.HMySQL.Protocol, Database.MySQL.HMySQL.NewConnection
   -- other-modules:       
   -- other-extensions:    
   ghc-options:         -O2 -Wall

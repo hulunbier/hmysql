@@ -12,6 +12,8 @@ import qualified Data.ByteString       as B
 import           Data.ByteString.Char8 hiding (reverse)
 import qualified Data.ByteString.Lazy  as L
 
+import Debug.Trace
+
 -- types
 
 data Packet = Packet
@@ -232,8 +234,11 @@ getResultSetPackets = do
 getResultSetHeader :: Get ResultSetHeader
 getResultSetHeader = do
       colCount@(Packed _ (ColCount c)) <- get
+      trace ("CC " ++  show c) $ return ()
       colDef <- getMany c
+      trace ("CD " ++  show colDef) $ return ()
       eof1 <- get
+      trace ("EOF1 " ++  show eof1) $ return ()
       return $ ResultSetHeader colCount colDef eof1
 
 -- go strict like getMany
@@ -348,19 +353,20 @@ getPacked = Packed <$> get <*> get
 putPacked :: Binary a => Packed a -> Put
 putPacked (Packed h b) = put h >> put b  -- TODO buggy
 
-getPackedS :: Binary a => Word8 -> Get (Packed a)
-getPackedS seqNum = Packed <$> (getPacketHeaderS seqNum) <*> get
+--getPackedS :: Binary a => Word8 -> Get (Packed a)
+--getPackedS seqNum = Packed <$> (getPacketHeaderS seqNum) <*> get
 
 getPackedC :: LenConstrained a => Word8 -> Get (Packed a)
 getPackedC seqNum = do 
     h <- getPacketHeaderS seqNum
+    traceShow ("header " ++ show h) $ return ()
     a <- getLenConstrained (hLen h)
     return $ Packed h a
 
 getPacketHeaderS :: Word8 -> Get PacketHeader
 getPacketHeaderS s = do 
         len <- getWord24 
-        s'   <- getWord8
+        s'  <- getWord8
         if s /= s'
           then fail ("sequence number mismatch, expecting "
                         ++ show s
@@ -429,7 +435,7 @@ instance LenConstrained ERR where
     getLenConstrained = getERR
 
 instance LenConstrained OK where
-    getLenConstrained = const getOK
+    getLenConstrained = const getOK -- TODO
 
 instance LenConstrained Greeting where
     getLenConstrained = const getGreeting
@@ -450,6 +456,20 @@ getAuthAck len = do
           else do
                 err <- getERR len 
                 return $ AuthAck (Left err)
+
+data ResultSetHeaderS = RespHOK  (Packed OK)
+                      | RespHERR (Packed ERR)
+                      | RespHCC  ResultSetHeader 
+
+getResultSetHeaderS :: Get ResultSetHeaderS
+getResultSetHeaderS = do
+        f <- lookAhead getWord8
+        traceShow ("lookAhead flag " ++ show f) $ return ()
+        case f of
+            0x00 -> RespHOK <$> getPackedC 0  -- TODO
+            0xff -> RespHERR <$> getPackedC 0
+            _    -> RespHCC <$> getResultSetHeader
+
 --
 instance Binary EOF where
     put (EOF w s) = do

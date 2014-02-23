@@ -31,11 +31,9 @@ repl conn = runInputT defaultSettings $ do
                 maybe (outputStrLn "Bye.") exec minput
                 where exec input =
                         case input of
-{--
                             '!':rest -> do
                                 liftIO $ showStream rest conn
                                 loop
---}
                             ':':rest -> do
                                 msg <- liftIO $ run conn (pack rest ) (return . Pr.ppShow)
                                 outputStrLn msg
@@ -50,7 +48,6 @@ repl conn = runInputT defaultSettings $ do
                                     RSRes (ResultSetPackets _ _ _ rows _) -> Pr.ppShow rows
                                     a -> Pr.ppShow a
 
-{--
 showStream :: String -> Connection -> IO ()
 showStream qry conn =
     runS conn (pack qry) $ do
@@ -62,7 +59,6 @@ showStream qry conn =
                         --withRows rows (cosnt $ return ())
                 SResOK x ->  print $ Pr.ppShow x
                 SResErr x -> print "*err*" >> (print $ Pr.ppShow x)
---}
 
 data Flags = Flags
     { host :: String
